@@ -211,4 +211,4 @@ Email notifications for bookings
 Streamlining your travel experiences with scalable microservices architecture.
 Email notifications for bookings
 
-🌍 TripSync
+
