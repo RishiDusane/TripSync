@@ -16,6 +16,8 @@
 [![Stripe](https://img.shields.io/badge/Stripe-008CDD?style=for-the-badge&logo=stripe&logoColor=white)](https://stripe.com/)
 [![JWT](https://img.shields.io/badge/JWT-000000?style=for-the-badge&logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
 [![Maven](https://img.shields.io/badge/Maven-C71A36?style=for-the-badge&logo=apachemaven&logoColor=white)](https://maven.apache.org/)
+[![JUnit5](https://img.shields.io/badge/JUnit_5-25A162?style=for-the-badge&logo=junit5&logoColor=white)](https://junit.org/junit5/)
+[![Mockito](https://img.shields.io/badge/Mockito-78A641?style=for-the-badge&logoColor=white)](https://site.mockito.org/)
 
 </div>
 
@@ -30,6 +32,7 @@
 - [🛠️ Tech Stack](#️-tech-stack)
 - [📂 Routes & Structure](#-routes--structure)
 - [✨ Features](#-features)
+- [🧪 Testing Approach](#-testing-approach)
 - [⚙️ Getting Started](#️-getting-started)
 - [🎯 Learning Outcomes](#-learning-outcomes)
 - [🔮 Roadmap](#-roadmap)
@@ -146,6 +149,9 @@ Built with **React 19** + **Vite 7** for blazing-fast builds and smooth UI perfo
 | 💳 **Payments** | Stripe | — |
 | 📦 **Build** | Maven | — |
 | 🌐 **HTTP Client** | Axios | — |
+| 🧪 **Unit Testing** | JUnit 5 + Mockito | — |
+| 🔬 **Integration Testing** | JUnit 5 + Spring Boot Test | — |
+| 📮 **API Testing** | Postman | — |
 
 </div>
 
@@ -188,6 +194,178 @@ Built with **React 19** + **Vite 7** for blazing-fast builds and smooth UI perfo
 
 ---
 
+## 🧪 Testing Approach
+
+In a microservices system, reliability requires testing at multiple levels — service isolation, integration boundaries, and API contracts. Testing was applied across all services using **JUnit 5**, **Mockito**, and **Postman**.
+
+---
+
+### 🔬 Unit Testing — Service Layer (Per Microservice)
+
+Each microservice's service layer was tested in isolation. Repositories and external service clients were mocked using **Mockito** to focus tests purely on business logic.
+
+**What was tested:**
+- Booking creation, cancellation, and status transitions (Booking Service)
+- JWT token generation and validation logic (Auth Service)
+- Tour package and destination CRUD operations (Catalog Service)
+- Review submission and retrieval rules (Feedback Service)
+- Input validation, constraint enforcement, and exception paths across all services
+
+**Example — Booking Service:**
+```java
+@ExtendWith(MockitoExtension.class)
+class BookingServiceTest {
+
+    @Mock
+    private BookingRepository bookingRepository;
+
+    @Mock
+    private CatalogClient catalogClient;
+
+    @InjectMocks
+    private BookingServiceImpl bookingService;
+
+    @Test
+    void shouldCreateBookingWhenPackageIsAvailable() {
+        BookingRequest request = new BookingRequest(1L, 2L, LocalDate.now());
+        PackageDto mockPackage = new PackageDto(1L, "Goa Tour", 5999.0, true);
+
+        when(catalogClient.getPackageById(1L)).thenReturn(mockPackage);
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookingResponse response = bookingService.createBooking(request);
+
+        assertNotNull(response);
+        assertEquals("PENDING", response.getStatus());
+        verify(bookingRepository, times(1)).save(any(Booking.class));
+    }
+
+    @Test
+    void shouldThrowExceptionWhenPackageNotFound() {
+        when(catalogClient.getPackageById(99L))
+            .thenThrow(new ResourceNotFoundException("Package not found"));
+
+        assertThrows(ResourceNotFoundException.class,
+            () -> bookingService.createBooking(new BookingRequest(99L, 1L, LocalDate.now())));
+    }
+}
+```
+
+---
+
+### 🔗 Integration Testing — API Layer (Per Microservice)
+
+Integration tests validated complete request-response cycles through the Controller → Service → Repository stack using **Spring Boot Test** with `MockMvc`.
+
+**What was tested across all services:**
+- Auth Service — registration, login, invalid credentials, token expiry
+- Catalog Service — package CRUD with Admin vs User role enforcement
+- Booking Service — booking creation, listing, and payment state transitions
+- Feedback Service — review submission and retrieval per package
+- HTTP status codes: 200, 201, 400, 401, 403, 404 across all endpoints
+- Response payload structure — field presence, data types, error message format
+
+**Example — Auth Service:**
+```java
+@SpringBootTest
+@AutoConfigureMockMvc
+class AuthControllerIntegrationTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Test
+    void shouldReturn200AndTokenOnValidLogin() throws Exception {
+        LoginRequest request = new LoginRequest("user@example.com", "password123");
+
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.token").isNotEmpty());
+    }
+
+    @Test
+    void shouldReturn401OnInvalidCredentials() throws Exception {
+        LoginRequest request = new LoginRequest("user@example.com", "wrongpassword");
+
+        mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isUnauthorized());
+    }
+}
+```
+
+---
+
+### 🔐 Security & RBAC Testing
+
+Authorization boundaries were explicitly tested to ensure role enforcement was correct across all services.
+
+**Scenarios validated:**
+- Admin-only endpoints return `403 Forbidden` when accessed with a User token
+- Protected endpoints return `401 Unauthorized` when no token is provided
+- Expired or malformed JWT tokens are correctly rejected at the gateway
+- Each role (Admin, User) can only access permitted endpoints and data
+
+```java
+@Test
+void shouldReturn403WhenUserAccessesAdminCatalogEndpoint() throws Exception {
+    String userToken = generateToken("ROLE_USER");
+
+    mockMvc.perform(post("/api/packages")
+            .header("Authorization", "Bearer " + userToken)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{ \"name\": \"Manali Tour\", \"price\": 7999 }"))
+        .andExpect(status().isForbidden());
+}
+```
+
+---
+
+### 🌐 API Gateway — Routing Verification
+
+The API Gateway was verified as the single entry point for all traffic, confirming correct routing to each downstream service.
+
+**What was tested:**
+- `/api/auth/**` routes correctly to Auth Service (Port 8081)
+- `/api/packages/**` routes correctly to Catalog Service (Port 8082)
+- `/api/bookings/**` routes correctly to Booking Service (Port 8083)
+- `/api/reviews/**` routes correctly to Feedback Service (Port 8084)
+- JWT Authorization headers are forwarded correctly to all downstream services
+
+---
+
+### 📮 API Testing — Postman
+
+All 20+ REST endpoints across all five services were manually validated using **Postman**, covering the complete end-to-end user journey.
+
+| Service | Test Scenarios Covered |
+|:--------|:----------------------|
+| 🔐 Auth | Register, login, invalid credentials, token expiry, password reset |
+| 🗺️ Catalog | Browse destinations, CRUD packages (Admin), invalid payloads |
+| 📅 Booking | Create booking, payment flow, booking history, cancellation |
+| ⭐ Feedback | Submit review, view by package, view by user, duplicate review |
+| 🌐 Gateway | Route verification per service, auth header forwarding |
+
+---
+
+### 📊 Test Coverage Summary
+
+| Layer | Tool | Scope |
+|:------|:-----|:------|
+| Service (Unit) | JUnit 5 + Mockito | Business logic, validation, exceptions — per microservice |
+| Controller (Integration) | JUnit 5 + Spring Boot Test | HTTP status, RBAC, payload structure — per microservice |
+| Security | MockMvc + JWT | Auth boundaries, role enforcement, token validation |
+| Gateway | Integration Tests | Route forwarding, header propagation |
+| API (Manual) | Postman | End-to-end user journey across all services |
+
+---
+
 ## ⚙️ Getting Started
 
 ### 📋 Prerequisites
@@ -202,7 +380,7 @@ Built with **React 19** + **Vite 7** for blazing-fast builds and smooth UI perfo
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/tripsync.git
+git clone https://github.com/RishiDusane/TripSync.git
 
 # 2. Navigate to backend
 cd backend/travel
@@ -245,6 +423,20 @@ npm run dev
 # ✅ Frontend live at → http://localhost:5173
 ```
 
+### 🧪 Run Tests
+
+```bash
+# Run all tests across all microservices (from root)
+mvn test
+
+# Run tests for a specific service
+cd auth-service && mvn test
+cd booking-service && mvn test
+
+# Run with coverage report
+mvn test jacoco:report
+```
+
 ---
 
 ## 🎯 Learning Outcomes
@@ -254,6 +446,8 @@ npm run dev
 - ✅ Secured APIs using **JWT & Spring Security**
 - ✅ Integrated **Stripe** payment gateway end-to-end
 - ✅ Built a scalable **React 19 + REST API** system
+- ✅ Applied **unit and integration testing** across distributed services using JUnit 5 and Mockito
+- ✅ Validated API contracts and cross-service flows using Postman
 - ✅ Followed **enterprise-grade backend architecture** patterns
 
 ---
@@ -268,6 +462,7 @@ npm run dev
 | 🔵 Planned | **Cloud Deployment** | AWS / Azure deployment |
 | 🟡 In Design | **Email Notifications** | Booking confirmations via SMTP |
 | 🟡 In Design | **Service Discovery** | Eureka / Consul integration |
+| 🔵 Planned | **Automated UI Tests** | Selenium / Playwright test suite |
 
 ---
 
@@ -293,10 +488,10 @@ npm run dev
 <img src="https://avatars.githubusercontent.com/RishiDusane" width="100" style="border-radius:50%"/>
 
 ### Rishi Dattatray Dusane
-**Java Full Stack Developer**
+**Software Development Engineer in Test (SDET)**
 
 [![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/RishiDusane)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/your-linkedin-here)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/rishidusane)
 
 </td>
 </tr>
